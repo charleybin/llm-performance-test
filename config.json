@@ -1,0 +1,12 @@
+{
+    "base_url": "http://192.168.14.184:7872/ai/v1",
+    "api_key": "vrv-ai-client",
+    "model_name": "DeepSeek-R1-32B",
+    "prompt": "如果一个班级有 30 个学生，其中 15 个是男生，男生的比例是多少？",
+    "temperature": 0.7,
+    "max_tokens": 32767,
+    "top_p": 1,
+    "num_requests": 200,
+    "max_workers": 200
+  }
+  
