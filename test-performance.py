@@ -12,6 +12,8 @@ import requests
 import random
 # 导入 tqdm 模块，用于显示进度条
 from tqdm import tqdm
+# 导入 datetime 模块，用于格式化日期和时间
+import datetime
 
 # 加载提示词文件
 def load_prompts(prompts_file_path):
@@ -61,14 +63,22 @@ def initialize_headers(config):
     :param config: 配置文件内容
     :return: 包含请求头信息的字典
     """
-    # 定义请求头字典，包含 Content-Type 和 Authorization 字段
-    headers = {
-        # 指定请求内容的类型为 JSON
-        "Content-Type": "application/json",
-        "x-bxy-id": f"{config['api_key']}",
-        # 使用配置文件中的 API 密钥进行授权
-        "Authorization": f"Bearer {config['api_key']}"
-    }
+    # 如果配置中定义了自定义headers，则使用配置中的headers
+    if "headers" in config:
+        headers = config["headers"].copy()
+        # 处理headers中可能需要替换的变量
+        for key, value in headers.items():
+            if isinstance(value, str) and "{api_key}" in value:
+                headers[key] = value.replace("{api_key}", config["api_key"])
+    else:
+        # 否则使用默认的headers
+        headers = {
+            # 指定请求内容的类型为 JSON
+            "Content-Type": "application/json",
+            "x-bxy-id": f"{config['api_key']}",
+            # 使用配置文件中的 API 密钥进行授权
+            "Authorization": f"Bearer {config['api_key']}"
+        }
     # 返回请求头字典
     return headers
 
@@ -199,7 +209,7 @@ def concurrent_requests(headers, config, prompts=None):
         # 使用tqdm创建进度条来展示任务提交进度
         for _ in tqdm(range(config["num_requests"]), desc="提交任务"):
             # 如果提供了提示词列表且不为空，则随机选择一个提示词
-            prompt = random.choice(prompts) if prompts and len(prompts) > 0 else config["prompt"]
+            prompt = random.choice(prompts) if prompts and len(prompts) > 0 else config.get("prompt_config", {}).get("default_prompt", "")
             # 提交请求任务到线程池
             future = executor.submit(
                 request_completion,
@@ -229,6 +239,7 @@ def concurrent_requests(headers, config, prompts=None):
                 # 更新进度条
                 pbar.update(1)
                 completed_futures.append(future)
+                print(f"【当前任务】生成tokens性能: {tokens_per_second:.2f}/s， tokens数量: {total_tokens} 耗时 {latency / 1000:.2f} 秒")
     # 返回包含所有请求结果的列表
     return results
 
@@ -249,6 +260,8 @@ def write_to_csv(results, output_file, config):
         # 将表头写入到 CSV 文件中
         writer.writerow(headers)
         # 遍历所有的请求结果，同时获取每个结果的索引
+        sum_total_tokens = 0
+        sum_tokens_per_second = 0
         for i, (response, latency, first_token_latency, non_first_token_avg_latency, tokens_per_second, prompt_tokens, total_tokens, completion_tokens, start_time, end_time, wait_time) in enumerate(results):
             # 格式化开始时间，精确到毫秒
             start_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)) + f".{int((start_time - int(start_time)) * 1000):03d}"
@@ -281,33 +294,59 @@ def write_to_csv(results, output_file, config):
                 # 等待时长，保留两位小数
                 f"{wait_time:.2f}"
             ])
+            sum_total_tokens = sum_total_tokens + total_tokens
+            sum_tokens_per_second = sum_tokens_per_second + tokens_per_second
+        average_tokens = sum_tokens_per_second / config["num_requests"]
+        print(f"总生成token数 {sum_total_tokens:.2f} 个")
+        print(f"平均生成token速度 {average_tokens:.2f} 个/s")
 
 # 主函数，程序的入口点
 if __name__ == "__main__":
     # 配置文件的路径
     config_path = "config.json"
-    # 提示词文件的路径
-    prompts_file_path = "/data/models/shareAI/shareAI-Llama3-DPO-zh-en-emoji/1_dpo_zhihu_2.jsonl"
     
     try:
-        # 加载提示词
-        prompts = load_prompts(prompts_file_path)
-        print(f"成功加载 {len(prompts)} 个提示词")
+        # 记录任务开始时间
+        task_start_time = time.time()
+        # 打印任务开始时间
+        start_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"任务开始时间: {start_time_str}")
         
         # 加载配置文件
         config = load_config(config_path)
+        
+        # 从配置中获取提示词配置
+        prompts = []
+        if config.get("prompt_config", {}).get("use_prompt_file", False):
+            prompts_file_path = config["prompt_config"]["prompt_file_path"]
+            prompts = load_prompts(prompts_file_path)
+            print(f"成功加载 {len(prompts)} 个提示词")
+        
         # 初始化请求头
         headers = initialize_headers(config)
         # 生成当前时间字符串，用于构建输出文件的名称
         time_str = time.strftime("%y%m%d%H%M%S", time.localtime())
         # 构建输出文件的名称，包含模型名称、请求次数和时间字符串
-        output_file = f"压力测试_{config['model_name']}_{config['num_requests']}times_{time_str}.csv"
+        output_file = f"压力测试_{config['num_requests']}times_{time_str}.csv"
         # 发起并发请求，并获取所有请求的结果
         results = concurrent_requests(headers, config, prompts)
         # 将结果写入 CSV 文件
         write_to_csv(results, output_file, config)
+        
+        # 记录任务结束时间
+        task_end_time = time.time()
+        # 打印任务结束时间
+        end_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"任务结束时间: {end_time_str}")
+        
+        # 计算并打印任务总耗时
+        task_duration = task_end_time - task_start_time
+        print(f"任务总耗时: {task_duration:.2f} 秒")
+
         # 输出测试完成的信息
         print(f"压力测试完成，结果已写入到 {output_file}")
+        
+        
     except Exception as e:
         # 输出错误信息
         print(f"运行过程中出现错误: {e}")
