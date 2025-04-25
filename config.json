@@ -1,12 +1,21 @@
 {
-    "base_url": "http://192.168.14.184:7872/ai/v1",
-    "api_key": "sk-1234567",
-    "model_name": "DeepSeek-R1-32B",
-    "prompt": "如果一个班级有 30 个学生，其中 15 个是男生，男生的比例是多少？",
+    "base_url": "http://192.168.24.76:8000/v1",
+    "api_key": "vrv-ai-test",
+    "model_name": "/opt/weights/DeepSeek-V3",
+    "headers": {
+        "Content-Type": "application/json",
+        "x-bxy-id": "{api_key}",
+        "Authorization": "Bearer {api_key}"
+    },
+    "prompt_config": {
+        "use_prompt_file": true,
+        "prompt_file_path": "/data/models/shareAI/shareAI-Llama3-DPO-zh-en-emoji/1_dpo_zhihu_2.jsonl",
+        "default_prompt": "如果一个班级有 30 个学生，其中 15 个是男生，男生的比例是多少？"
+    },
     "temperature": 0.7,
     "max_tokens": 32767,
     "top_p": 1,
-    "num_requests": 200,
-    "max_workers": 200
-  }
+    "num_requests": 10,
+    "max_workers": 10
+}
   

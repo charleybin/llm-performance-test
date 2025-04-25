@@ -297,7 +297,7 @@ def write_to_csv(results, output_file, config):
             sum_total_tokens = sum_total_tokens + total_tokens
             sum_tokens_per_second = sum_tokens_per_second + tokens_per_second
         average_tokens = sum_tokens_per_second / config["num_requests"]
-        print(f"总生成token数 {sum_total_tokens:.2f} 个")
+        print(f"总生成token数 {sum_total_tokens} 个")
         print(f"平均生成token速度 {average_tokens:.2f} 个/s")
 
 # 主函数，程序的入口点
