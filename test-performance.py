@@ -83,7 +83,7 @@ def initialize_headers(config):
     return headers
 
 # 请求函数，使用流式输出
-def request_completion(headers, base_url, model, prompt, temperature, max_tokens, top_p):
+def request_completion(headers, base_url, model, prompt, temperature, max_tokens, top_p, enable_thinking=False):
     """
     发送请求并获取流式响应
 
@@ -94,6 +94,7 @@ def request_completion(headers, base_url, model, prompt, temperature, max_tokens
     :param temperature: 控制生成文本的随机性
     :param max_tokens: 生成文本的最大 token 数
     :param top_p: 采样概率
+    :param enable_thinking: 是否启用思考模式
     :return: 响应结果、响应耗时、首 token 延迟、非首 token 平均延迟、每秒生成 token 数、输入 token 数、总 token 数、输出 token 数、请求开始时间、请求结束时间
     """
     # 记录请求开始时间
@@ -111,15 +112,18 @@ def request_completion(headers, base_url, model, prompt, temperature, max_tokens
         # 输入的提示信息
         "messages": [{"role": "user", "content": prompt}],
         # 开启流式输出
-        "stream": False
+        "stream": False,
+        # 思考模式开关放在chat_template_kwargs中
+        "chat_template_kwargs": {"enable_thinking": enable_thinking}
     }
     # 用于存储最终的响应文本
     response_text = ""
     # 用于存储所有的响应块
     full_response = []
+    request_url = f"{base_url}/chat/completions"
     try:
         # 发送 POST 请求，并开启流式响应
-        with requests.post(f"{base_url}/chat/completions", headers=headers, json=data, stream=True) as response:
+        with requests.post(request_url, headers=headers, json=data, stream=True) as response:
             # 检查响应状态码，如果不是 200 则抛出异常
             response.raise_for_status()
             # 遍历响应的每一行
@@ -147,6 +151,9 @@ def request_completion(headers, base_url, model, prompt, temperature, max_tokens
     except requests.RequestException as e:
         # 打印请求出错信息
         print(f"请求出错: {e}")
+        print(f"请求URL: {request_url}")
+        print(f"请求头: {headers}")
+        print(f"请求体: {json.dumps(data, ensure_ascii=False)}")
     # 记录请求结束时间
     end_time = time.time()
     # 计算响应耗时并转换为毫秒
@@ -219,7 +226,8 @@ def concurrent_requests(headers, config, prompts=None):
                 prompt,
                 config["temperature"],
                 config["max_tokens"],
-                config["top_p"]
+                config["top_p"],
+                config.get("enable_thinking", False)  # 添加思考模式参数
             )
             # 记录任务提交时间
             future.start_time = time.time()
@@ -345,8 +353,8 @@ if __name__ == "__main__":
 
         # 输出测试完成的信息
         print(f"压力测试完成，结果已写入到 {output_file}")
-        
-        
+
+
     except Exception as e:
         # 输出错误信息
         print(f"运行过程中出现错误: {e}")

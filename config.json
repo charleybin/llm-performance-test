@@ -16,6 +16,7 @@
     "max_tokens": 32767,
     "top_p": 1,
     "num_requests": 10,
-    "max_workers": 10
+    "max_workers": 10,
+    "enable_thinking": true
 }
   
