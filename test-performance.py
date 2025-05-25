@@ -14,6 +14,42 @@ import random
 from tqdm import tqdm
 # 导入 datetime 模块，用于格式化日期和时间
 import datetime
+# 导入 os 模块，用于处理文件路径
+import os
+# 导入 logging 模块，用于记录日志
+import logging
+
+# 设置日志配置
+def setup_logging(log_dir="logs"):
+    """
+    设置日志配置
+
+    :param log_dir: 日志文件存放目录
+    :return: 配置好的日志记录器
+    """
+    # 确保日志目录存在
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    # 创建日志文件名，包含当前时间
+    log_file = os.path.join(log_dir, f"api_requests_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    
+    # 配置日志记录器
+    logger = logging.getLogger("api_logger")
+    logger.setLevel(logging.DEBUG)
+    
+    # 创建文件处理器
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    
+    # 创建格式化器
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    
+    # 将处理器添加到记录器
+    logger.addHandler(file_handler)
+    
+    return logger
 
 # 加载提示词文件
 def load_prompts(prompts_file_path):
@@ -83,7 +119,7 @@ def initialize_headers(config):
     return headers
 
 # 请求函数，使用流式输出
-def request_completion(headers, base_url, model, prompt, temperature, max_tokens, top_p, enable_thinking=False):
+def request_completion(headers, base_url, model, prompt, temperature, max_tokens, top_p, enable_thinking=False, logger=None):
     """
     发送请求并获取流式响应
 
@@ -95,6 +131,7 @@ def request_completion(headers, base_url, model, prompt, temperature, max_tokens
     :param max_tokens: 生成文本的最大 token 数
     :param top_p: 采样概率
     :param enable_thinking: 是否启用思考模式
+    :param logger: 日志记录器
     :return: 响应结果、响应耗时、首 token 延迟、非首 token 平均延迟、每秒生成 token 数、输入 token 数、总 token 数、输出 token 数、请求开始时间、请求结束时间
     """
     # 记录请求开始时间
@@ -114,71 +151,128 @@ def request_completion(headers, base_url, model, prompt, temperature, max_tokens
         # 开启流式输出
         "stream": False,
         # 思考模式开关放在chat_template_kwargs中
-        "chat_template_kwargs": {"enable_thinking": enable_thinking}
+        # "chat_template_kwargs": {"enable_thinking": enable_thinking}
     }
     # 用于存储最终的响应文本
     response_text = ""
     # 用于存储所有的响应块
     full_response = []
     request_url = f"{base_url}/chat/completions"
+    
+    # 记录请求信息到日志
+    if logger:
+        request_id = f"req_{int(time.time()*1000)}_{random.randint(1000, 9999)}"
+        logger.info(f"REQUEST {request_id} - URL: {request_url}")
+        logger.info(f"REQUEST {request_id} - Headers: {json.dumps(headers, ensure_ascii=False)}")
+        logger.info(f"REQUEST {request_id} - Body: {json.dumps(data, ensure_ascii=False)}")
+    
     try:
         # 发送 POST 请求，并开启流式响应
         with requests.post(request_url, headers=headers, json=data, stream=True) as response:
+            # 记录响应状态码
+            if logger:
+                logger.info(f"RESPONSE {request_id} - Status Code: {response.status_code}")
+                
+                # 记录错误响应的消息体
+                if response.status_code != 200:
+                    try:
+                        response_body = response.content.decode('utf-8')
+                        logger.error(f"RESPONSE {request_id} - Error Response Body: {response_body}")
+                    except Exception as decode_error:
+                        logger.error(f"RESPONSE {request_id} - Failed to decode error response: {str(decode_error)}")
+                        logger.error(f"RESPONSE {request_id} - Raw Error Response: {response.content}")
+            
             # 检查响应状态码，如果不是 200 则抛出异常
             response.raise_for_status()
-            # 遍历响应的每一行
-            for line in response.iter_lines():
-                if line:
-                    # 去除行首的 "data: " 并解码为字符串
-                    line = line.lstrip(b'data: ').decode('utf-8')
-                    if line == "[DONE]":
-                        # 如果遇到结束标志，则跳出循环
-                        break
-                    try:
-                        # 解析 JSON 数据
-                        chunk = json.loads(line)
-                        # 将解析后的块添加到 full_response 列表中
-                        full_response.append(chunk)
-                        # 获取响应块中的 delta 字段
-                        delta = chunk.get('choices', [{}])[0].get('delta', {})
-                        # 获取 delta 字段中的 content 内容
-                        content = delta.get('content', '')
-                        # 将内容添加到响应文本中
-                        response_text += content
-                    except json.JSONDecodeError:
-                        # 如果解析 JSON 数据出错，则跳过当前行
-                        continue
+            
+            # 检查是否为流式响应
+            is_stream = data.get('stream', False) and 'application/json' in response.headers.get('Content-Type', '')
+            
+            if is_stream:
+                # 流式响应处理逻辑
+                for line in response.iter_lines():
+                    if line:
+                        # 去除行首的 "data: " 并解码为字符串
+                        line = line.lstrip(b'data: ').decode('utf-8')
+                        if line == "[DONE]":
+                            # 如果遇到结束标志，则跳出循环
+                            break
+                        try:
+                            # 解析 JSON 数据
+                            chunk = json.loads(line)
+                            # 将解析后的块添加到 full_response 列表中
+                            full_response.append(chunk)
+                            # 获取响应块中的 delta 字段
+                            delta = chunk.get('choices', [{}])[0].get('delta', {})
+                            # 获取 delta 字段中的 content 内容
+                            content = delta.get('content', '')
+                            # 将内容添加到响应文本中
+                            response_text += content
+                        except json.JSONDecodeError:
+                            # 如果解析 JSON 数据出错，则跳过当前行
+                            if logger:
+                                logger.error(f"RESPONSE {request_id} - JSON Parse Error: {line}")
+                            continue
+            else:
+                # 非流式响应处理逻辑
+                try:
+                    # 获取完整响应并解析为JSON
+                    response_json = response.json()
+                    
+                    # 记录完整响应到日志
+                    if logger:
+                        logger.info(f"RESPONSE {request_id} - Full Response: {json.dumps(response_json, ensure_ascii=False)}")
+                    
+                    # 将响应添加到full_response列表
+                    full_response.append(response_json)
+                    
+                    # 从响应中提取文本内容
+                    choices = response_json.get('choices', [])
+                    if choices and len(choices) > 0:
+                        message = choices[0].get('message', {})
+                        response_text = message.get('content', '')
+                except json.JSONDecodeError as e:
+                    if logger:
+                        logger.error(f"RESPONSE {request_id} - Failed to parse JSON response: {str(e)}")
+                        logger.error(f"RESPONSE {request_id} - Raw Response: {response.text}")
+                    # 出错时设置一个空的响应对象
+                    full_response = []
+                    response_text = ""
+            
+            # 记录完整响应到日志 (如果是流式响应)
+            if is_stream and logger:
+                logger.info(f"RESPONSE {request_id} - Full Response: {json.dumps(full_response, ensure_ascii=False)}")
+                
     except requests.RequestException as e:
         # 打印请求出错信息
-        print(f"请求出错: {e}")
+        error_msg = f"请求出错: {e}"
+        print(error_msg)
         print(f"请求URL: {request_url}")
         print(f"请求头: {headers}")
         print(f"请求体: {json.dumps(data, ensure_ascii=False)}")
+        
+        # 记录错误到日志
+        if logger:
+            logger.error(f"ERROR {request_id} - {error_msg}")
+            logger.error(f"ERROR {request_id} - 请求URL: {request_url}")
+            logger.error(f"ERROR {request_id} - 请求头: {json.dumps(headers, ensure_ascii=False)}")
+            logger.error(f"ERROR {request_id} - 请求体: {json.dumps(data, ensure_ascii=False)}")
+    
     # 记录请求结束时间
     end_time = time.time()
     # 计算响应耗时并转换为毫秒
     latency = (end_time - start_time) * 1000
-    # 注释提示接下来要解析完整的 JSON 数据
-    # 解析完整的 JSON 数据
-    # 初始化一个字典，用于合并所有响应块中的 delta 信息
-    combined_response = {"choices": [{"delta": {}}]}
-    # 初始化一个空字典，用于存储使用信息
+    
+    # 解析使用信息
     usage = {}
-    # 遍历所有响应块
-    for chunk in full_response:
-        # 检查当前响应块中是否包含使用信息
-        if 'usage' in chunk:
-            # 如果包含，将使用信息更新到 usage 字典中
-            usage = chunk['usage']
-        # 检查choices是否存在且不为空
-        if chunk.get('choices') and len(chunk['choices']) > 0:
-            # 合并当前响应块中的 delta 信息到 combined_response 中
-            combined_response['choices'][0]['delta'] = {
-                # 保留已有的 delta 信息
-                **combined_response['choices'][0]['delta'],
-                # 合并新的 delta 信息，如果不存在则使用空字典
-                **chunk.get('choices', [{}])[0].get('delta', {})
-            }
+    
+    # 从响应中提取使用信息
+    if full_response:
+        for chunk in full_response:
+            if 'usage' in chunk:
+                usage = chunk['usage']
+                break
+    
     # 从 usage 字典中获取首 token 延迟，如果不存在则默认为 0
     first_token_latency = usage.get("time_to_first_token_ms", 0)
     # 从 usage 字典中获取非首 token 平均延迟，如果不存在则默认为 0
@@ -190,18 +284,26 @@ def request_completion(headers, base_url, model, prompt, temperature, max_tokens
     # 从 usage 字典中获取输出 token 数，如果不存在则默认为 0
     completion_tokens = usage.get("completion_tokens", 0)
     # 从 usage 字典中获取每秒生成 token 数，如果不存在则默认为 0
-    tokens_per_second = usage.get("tokens_per_second", total_tokens / latency * 1000)
+    tokens_per_second = usage.get("tokens_per_second", 0)
+    if tokens_per_second == 0 and latency > 0 and total_tokens > 0:
+        tokens_per_second = total_tokens / latency * 1000
+    
+    # 记录性能数据到日志
+    if logger:
+        logger.info(f"PERFORMANCE {request_id} - Latency: {latency:.2f}ms, First Token: {first_token_latency:.2f}ms, Tokens/s: {tokens_per_second:.2f}, Total Tokens: {total_tokens}")
+    
     # 返回响应结果、响应耗时、首 token 延迟、非首 token 平均延迟、每秒生成 token 数、输入 token 数、总 token 数、输出 token 数、请求开始时间、请求结束时间
     return {"choices": [{"message": {"content": response_text}}]}, latency, first_token_latency, non_first_token_avg_latency, tokens_per_second, prompt_tokens, total_tokens, completion_tokens, start_time, end_time
 
 # 多线程并发请求
-def concurrent_requests(headers, config, prompts=None):
+def concurrent_requests(headers, config, prompts=None, logger=None):
     """
     并发执行多个请求
 
     :param headers: HTTP 请求头
     :param config: 配置文件内容
     :param prompts: 提示词列表，如果提供则随机选择，否则使用配置中的默认提示词
+    :param logger: 日志记录器
     :return: 包含所有请求结果的列表
     """
     # 从配置文件中获取请求的基础 URL
@@ -227,7 +329,8 @@ def concurrent_requests(headers, config, prompts=None):
                 config["temperature"],
                 config["max_tokens"],
                 config["top_p"],
-                config.get("enable_thinking", False)  # 添加思考模式参数
+                config.get("enable_thinking", False),  # 添加思考模式参数
+                logger  # 传递日志记录器
             )
             # 记录任务提交时间
             future.start_time = time.time()
@@ -314,14 +417,20 @@ if __name__ == "__main__":
     config_path = "config.json"
     
     try:
+        # 设置日志记录器
+        logger = setup_logging()
+        logger.info("=== 压力测试开始 ===")
+        
         # 记录任务开始时间
         task_start_time = time.time()
         # 打印任务开始时间
         start_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"任务开始时间: {start_time_str}")
+        logger.info(f"任务开始时间: {start_time_str}")
         
         # 加载配置文件
         config = load_config(config_path)
+        logger.info(f"加载配置: {json.dumps(config, ensure_ascii=False)}")
         
         # 从配置中获取提示词配置
         prompts = []
@@ -329,6 +438,7 @@ if __name__ == "__main__":
             prompts_file_path = config["prompt_config"]["prompt_file_path"]
             prompts = load_prompts(prompts_file_path)
             print(f"成功加载 {len(prompts)} 个提示词")
+            logger.info(f"成功加载 {len(prompts)} 个提示词")
         
         # 初始化请求头
         headers = initialize_headers(config)
@@ -337,7 +447,7 @@ if __name__ == "__main__":
         # 构建输出文件的名称，包含模型名称、请求次数和时间字符串
         output_file = f"压力测试_{config['num_requests']}times_{time_str}.csv"
         # 发起并发请求，并获取所有请求的结果
-        results = concurrent_requests(headers, config, prompts)
+        results = concurrent_requests(headers, config, prompts, logger)
         # 将结果写入 CSV 文件
         write_to_csv(results, output_file, config)
         
@@ -346,14 +456,17 @@ if __name__ == "__main__":
         # 打印任务结束时间
         end_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"任务结束时间: {end_time_str}")
+        logger.info(f"任务结束时间: {end_time_str}")
         
         # 计算并打印任务总耗时
         task_duration = task_end_time - task_start_time
         print(f"任务总耗时: {task_duration:.2f} 秒")
+        logger.info(f"任务总耗时: {task_duration:.2f} 秒")
 
         # 输出测试完成的信息
         print(f"压力测试完成，结果已写入到 {output_file}")
-
+        logger.info(f"压力测试完成，结果已写入到 {output_file}")
+        logger.info("=== 压力测试结束 ===")
 
     except Exception as e:
         # 输出错误信息
@@ -361,4 +474,11 @@ if __name__ == "__main__":
         # 导入 traceback 模块，用于获取详细的错误信息
         import traceback
         # 输出详细的错误信息
-        print(traceback.format_exc())
+        error_traceback = traceback.format_exc()
+        print(error_traceback)
+        
+        # 记录错误到日志
+        if 'logger' in locals():
+            logger.error(f"运行过程中出现错误: {e}")
+            logger.error(error_traceback)
+            logger.info("=== 压力测试异常终止 ===")
