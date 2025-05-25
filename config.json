@@ -9,7 +9,7 @@
     },
     "prompt_config": {
         "use_prompt_file": true,
-        "prompt_file_path": "/data/models/shareAI/shareAI-Llama3-DPO-zh-en-emoji/1_dpo_zhihu_2.jsonl",
+        "prompt_file_path": "1_dpo_zhihu_2.jsonl",
         "default_prompt": "如果一个班级有 30 个学生，其中 15 个是男生，男生的比例是多少？"
     },
     "temperature": 0.7,
